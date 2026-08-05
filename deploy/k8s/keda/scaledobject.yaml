@@ -6,9 +6,9 @@ metadata:
 spec:
   scaleTargetRef:
     name: thumbnail-service
-  cooldownPeriod: 10
+  cooldownPeriod: 120
   maxReplicaCount: 3
-  minReplicaCount: 1
+  minReplicaCount: 0
   triggers:
     - type: redis
       authenticationRef:
