@@ -1,0 +1,7 @@
+# Obsidian vault (project memory, local only)
+.obsidian/
+_notes/
+
+# Go
+*.log
+bin/
