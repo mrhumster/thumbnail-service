@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	pb "github.com/mrhumster/thumbnail-service/gen/go/stream"
 	"github.com/mrhumster/thumbnail-service/internal/processor"
 	"github.com/mrhumster/thumbnail-service/internal/storage"
 )
+
+const presignTTL = 15 * time.Minute
 
 type HandleThumbnail struct {
 	processor     processor.ThumbnailProcessor
@@ -41,18 +44,16 @@ func (h *HandleThumbnail) HandleThumbsnailTask(ctx context.Context, t *asynq.Tas
 	}
 	defer os.RemoveAll(workDir)
 
-	inputLocal := filepath.Join(workDir, "input.mp4")
 	thumbLocal := filepath.Join(workDir, "thumbnail.jpg")
 
-	slog.Info("downloading source", "uuid", p.StreamUUID, "path", p.InputPath)
-	if err := h.storage.Download(ctx, p.InputPath, inputLocal); err != nil {
-		if strings.Contains(err.Error(), "does not exist") {
-			return fmt.Errorf("source missing: %w", asynq.SkipRetry)
-		}
+	slog.Info("generating presigned url", "uuid", p.StreamUUID, "path", p.InputPath)
+	inputURL, err := h.storage.GeneratePresignedURL(ctx, p.InputPath, presignTTL)
+	if err != nil {
+		slog.Error("failed to generate presigned url", "uuid", p.StreamUUID, "error", err)
 		return err
 	}
 
-	duration, err := h.processor.GetDuration(ctx, inputLocal)
+	duration, err := h.processor.GetDuration(ctx, inputURL)
 	if err != nil {
 		slog.Warn("failed to get duration, using 0", "uuid", p.StreamUUID, "error", err)
 		duration = 0
@@ -60,13 +61,18 @@ func (h *HandleThumbnail) HandleThumbsnailTask(ctx context.Context, t *asynq.Tas
 
 	seek := duration * 0.1
 	slog.Info("generating thumbnail", "uuid", p.StreamUUID, "duration", duration, "seek", seek)
-	if err := h.processor.GenerateThumbnail(ctx, inputLocal, thumbLocal, seek); err != nil {
+	if err := h.processor.GenerateThumbnail(ctx, inputURL, thumbLocal, seek); err != nil {
+		slog.Error("thumbnail generation failed", "uuid", p.StreamUUID, "error", err)
+		if isMissingSource(err) {
+			return fmt.Errorf("source missing: %w", asynq.SkipRetry)
+		}
 		return err
 	}
 
 	remoteKey := fmt.Sprintf("thumbnails/%s.jpg", p.StreamUUID)
 	slog.Info("uploading thumbnail", "uuid", p.StreamUUID, "key", remoteKey)
 	if err := h.storage.Upload(ctx, remoteKey, thumbLocal, "image/jpeg"); err != nil {
+		slog.Error("thumbnail upload failed", "uuid", p.StreamUUID, "error", err)
 		return err
 	}
 
@@ -81,4 +87,11 @@ func (h *HandleThumbnail) HandleThumbsnailTask(ctx context.Context, t *asynq.Tas
 
 	slog.Info("thumbnail generated", "uuid", p.StreamUUID, "key", remoteKey)
 	return nil
+}
+
+func isMissingSource(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "404") ||
+		strings.Contains(msg, "nosuchkey") ||
+		strings.Contains(msg, "not found")
 }

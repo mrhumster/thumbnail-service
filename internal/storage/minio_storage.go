@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -36,4 +37,12 @@ func (s *MinIOStorage) Upload(ctx context.Context, objectName, filePath, content
 	}
 	slog.Info("Upload success", "Bucket", s.Bucket, "uploadInfo", uploadInfo)
 	return nil
+}
+
+func (s *MinIOStorage) GeneratePresignedURL(ctx context.Context, objectName string, expires time.Duration) (string, error) {
+	u, err := s.Client.PresignedGetObject(ctx, s.Bucket, objectName, expires, nil)
+	if err != nil {
+		return "", fmt.Errorf("error generating presigned url for %s: %w", objectName, err)
+	}
+	return u.String(), nil
 }

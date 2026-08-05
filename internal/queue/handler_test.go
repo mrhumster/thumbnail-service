@@ -44,13 +44,13 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		})
 
 		mockStorage.EXPECT().
-			Download(gomock.Any(), "raw/video.mp4", gomock.Any()).
-			Return(nil)
+			GeneratePresignedURL(gomock.Any(), "raw/video.mp4", presignTTL).
+			Return("http://minio.local/raw/video.mp4?X-Amz-Expires=900", nil)
 		mockProcessor.EXPECT().
-			GetDuration(gomock.Any(), gomock.Any()).
+			GetDuration(gomock.Any(), "http://minio.local/raw/video.mp4?X-Amz-Expires=900").
 			Return(30.0, nil)
 		mockProcessor.EXPECT().
-			GenerateThumbnail(gomock.Any(), gomock.Any(), gomock.Any(), 3.0).
+			GenerateThumbnail(gomock.Any(), "http://minio.local/raw/video.mp4?X-Amz-Expires=900", gomock.Any(), 3.0).
 			Return(nil)
 		mockStorage.EXPECT().
 			Upload(gomock.Any(), fmt.Sprintf("thumbnails/%s.jpg", streamUUID), gomock.Any(), "image/jpeg").
@@ -73,25 +73,7 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("download missing source skips retry", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		handler, _, mockStorage, _ := newHandler(ctrl)
-		ctx := context.Background()
-		task := newTestTask(t, ThumbsnailProcessorPayload{
-			StreamUUID: uuid.New(),
-			InputPath:  "raw/missing.mp4",
-		})
-
-		mockStorage.EXPECT().
-			Download(gomock.Any(), "raw/missing.mp4", gomock.Any()).
-			Return(fmt.Errorf("does not exist"))
-
-		err := handler.HandleThumbsnailTask(ctx, task)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, asynq.SkipRetry)
-	})
-
-	t.Run("download error propagated", func(t *testing.T) {
+	t.Run("presign error propagated", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		handler, _, mockStorage, _ := newHandler(ctrl)
 		ctx := context.Background()
@@ -101,12 +83,36 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		})
 
 		mockStorage.EXPECT().
-			Download(gomock.Any(), "raw/video.mp4", gomock.Any()).
-			Return(fmt.Errorf("network error"))
+			GeneratePresignedURL(gomock.Any(), "raw/video.mp4", presignTTL).
+			Return("", fmt.Errorf("presign error"))
 
 		err := handler.HandleThumbsnailTask(ctx, task)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "network error")
+		assert.Contains(t, err.Error(), "presign error")
+	})
+
+	t.Run("missing source skips retry", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		handler, mockProcessor, mockStorage, _ := newHandler(ctrl)
+		ctx := context.Background()
+		task := newTestTask(t, ThumbsnailProcessorPayload{
+			StreamUUID: uuid.New(),
+			InputPath:  "raw/missing.mp4",
+		})
+
+		mockStorage.EXPECT().
+			GeneratePresignedURL(gomock.Any(), "raw/missing.mp4", presignTTL).
+			Return("http://minio.local/raw/missing.mp4?X-Amz-Expires=900", nil)
+		mockProcessor.EXPECT().
+			GetDuration(gomock.Any(), gomock.Any()).
+			Return(0.0, fmt.Errorf("ffprobe 404"))
+		mockProcessor.EXPECT().
+			GenerateThumbnail(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(fmt.Errorf("ffmpeg: 404 Not Found"))
+
+		err := handler.HandleThumbsnailTask(ctx, task)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, asynq.SkipRetry)
 	})
 
 	t.Run("generate error propagated", func(t *testing.T) {
@@ -119,8 +125,8 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		})
 
 		mockStorage.EXPECT().
-			Download(gomock.Any(), "raw/video.mp4", gomock.Any()).
-			Return(nil)
+			GeneratePresignedURL(gomock.Any(), "raw/video.mp4", presignTTL).
+			Return("http://minio.local/raw/video.mp4", nil)
 		mockProcessor.EXPECT().
 			GetDuration(gomock.Any(), gomock.Any()).
 			Return(30.0, nil)
@@ -143,8 +149,8 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		})
 
 		mockStorage.EXPECT().
-			Download(gomock.Any(), "raw/video.mp4", gomock.Any()).
-			Return(nil)
+			GeneratePresignedURL(gomock.Any(), "raw/video.mp4", presignTTL).
+			Return("http://minio.local/raw/video.mp4", nil)
 		mockProcessor.EXPECT().
 			GetDuration(gomock.Any(), gomock.Any()).
 			Return(30.0, nil)
@@ -170,8 +176,8 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		})
 
 		mockStorage.EXPECT().
-			Download(gomock.Any(), "raw/video.mp4", gomock.Any()).
-			Return(nil)
+			GeneratePresignedURL(gomock.Any(), "raw/video.mp4", presignTTL).
+			Return("http://minio.local/raw/video.mp4", nil)
 		mockProcessor.EXPECT().
 			GetDuration(gomock.Any(), gomock.Any()).
 			Return(30.0, nil)
