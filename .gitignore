@@ -5,3 +5,4 @@ _notes/
 # Go
 *.log
 bin/
+thumbnail-worker

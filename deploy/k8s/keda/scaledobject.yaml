@@ -1,0 +1,29 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: thumbnail-keda
+  namespace: go-app
+spec:
+  scaleTargetRef:
+    name: thumbnail-service
+  cooldownPeriod: 10
+  maxReplicaCount: 3
+  minReplicaCount: 1
+  triggers:
+    - type: redis
+      authenticationRef:
+        name: thumbnail-keda-redis-auth
+      metadata:
+        address: casbin-redis-master.go-app.svc.cluster.local:6379
+        databaseIndex: "2"
+        listName: "asynq:{thumbsnails}:pending"
+        listLength: "1"
+    - type: redis
+      authenticationRef:
+        name: thumbnail-keda-redis-auth
+      metadata:
+        address: casbin-redis-master.go-app.svc.cluster.local:6379
+        databaseIndex: "2"
+        listName: "asynq:{thumbsnails}:active"
+        listLength: "1"
+        type: "zset"
