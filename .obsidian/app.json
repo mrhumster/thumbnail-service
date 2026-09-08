@@ -1,0 +1,15 @@
+{
+  "userIgnoreFilters": [
+    "cmd",
+    "config",
+    ".git",
+    ".obsidian",
+    ".opencode",
+    "*.go",
+    "*.sum",
+    "*.mod",
+    "Dockerfile",
+    "Makefile",
+    ".gitignore"
+  ]
+}
