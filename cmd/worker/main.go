@@ -8,6 +8,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/mrhumster/thumbnail-service/config"
 	pb "github.com/mrhumster/thumbnail-service/gen/go/stream"
+	"github.com/mrhumster/thumbnail-service/internal/grpctls"
 	"github.com/mrhumster/thumbnail-service/internal/processor"
 	"github.com/mrhumster/thumbnail-service/internal/queue"
 	"github.com/mrhumster/thumbnail-service/internal/storage"
@@ -46,9 +47,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	creds := insecure.NewCredentials()
+	if cfg.Server.GRPCTLSEnabled {
+		creds, err = grpctls.ClientTLSCreds(cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile, "stream-service")
+		if err != nil {
+			slog.Error("error init gRPC TLS client", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	conn, err := grpc.NewClient(
 		cfg.Server.StreamServiceAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 	)
 	if err != nil {
 		slog.Error("error init gRPC client: %w", "error", err)
