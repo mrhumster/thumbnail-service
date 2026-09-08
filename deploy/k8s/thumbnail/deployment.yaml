@@ -1,0 +1,63 @@
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thumbnail-service
+  namespace: go-app
+  labels:
+    app: thumbnail-service
+spec:
+  selector:
+    matchLabels:
+      app: thumbnail-service
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: thumbnail-service
+      labels:
+        app: thumbnail-service
+    spec:
+      terminationGracePeriodSeconds: 3600
+      containers:
+        - name: thumbnail-service
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          image: xomrkob/thumbnail-service:latest
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp-disk
+          imagePullPolicy:
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: 4000m
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "ps aux | grep worker"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          envFrom:
+            - configMapRef:
+                name: thumbnail-service-config
+            - configMapRef:
+                name: go-app-config
+            - secretRef:
+                name: casbin-redis
+            - secretRef:
+                name: minio-credentials
+      volumes:
+        - name: tmp-disk
+          emptyDir:
+            sizeLimit: 10Gi
+      restartPolicy: Always

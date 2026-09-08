@@ -7,17 +7,17 @@ import (
 	"github.com/common-nighthawk/go-figure"
 	"github.com/hibiken/asynq"
 	"github.com/mrhumster/thumbnail-service/config"
-	pb "github.com/mrhumster/transcoder-service/gen/go/stream"
-	"github.com/mrhumster/transcoder-service/internal/processor"
-	"github.com/mrhumster/transcoder-service/internal/queue"
-	"github.com/mrhumster/transcoder-service/internal/storage"
-	"github.com/mrhumster/transcoder-service/internal/worker"
+	pb "github.com/mrhumster/thumbnail-service/gen/go/stream"
+	"github.com/mrhumster/thumbnail-service/internal/processor"
+	"github.com/mrhumster/thumbnail-service/internal/queue"
+	"github.com/mrhumster/thumbnail-service/internal/storage"
+	"github.com/mrhumster/thumbnail-service/internal/worker"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
-	wellcome := figure.NewFigure("transcoder v0.1.0", "graffiti", true)
+	wellcome := figure.NewFigure("thumbnail v0.1.0", "graffiti", true)
 	wellcome.Print()
 	opts := &slog.HandlerOptions{
 		Level:     slog.LevelDebug,
@@ -47,7 +47,7 @@ func main() {
 	}
 
 	conn, err := grpc.NewClient(
-		cfg.Server.StreamSeviceAddr,
+		cfg.Server.StreamServiceAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -60,11 +60,11 @@ func main() {
 	streamServiceClient := pb.NewStreamServiceClient(conn)
 
 	srv := worker.NewAsynqWorker(cfg, streamServiceClient)
-	hanlder := queue.NewHandleVideoTranscoder(ffmpeg, minioStorage, streamServiceClient)
+	handler := queue.NewHandleThumbnail(ffmpeg, minioStorage, streamServiceClient)
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(queue.TaskVideoTranscoding, hanlder.HandleVideoTranscoderTask)
+	mux.HandleFunc(queue.TaskThumbsnailProcessor, handler.HandleThumbsnailTask)
 
-	slog.Info("Transoder Worker started...")
+	slog.Info("Thumbnail Worker started...")
 	if err := srv.Run(mux); err != nil {
 		slog.Error("could not run asynq server:", "error", err.Error())
 		os.Exit(1)

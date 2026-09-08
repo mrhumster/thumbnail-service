@@ -20,12 +20,12 @@ type Worker struct {
 }
 
 type Server struct {
-	StreamSeviceAddr string
+	StreamServiceAddr string
 }
 
 type Redis struct {
 	Addr     string
-	Passwrod string
+	Password string
 	DB       int
 }
 
@@ -64,7 +64,7 @@ func LoadConfig() (*Config, error) {
 	return &Config{
 		Redis: Redis{
 			Addr:     getEnv("REDIS_ADDR", "localhost"),
-			Passwrod: getEnv("redis-password", ""),
+			Password: getEnv("redis-password", ""),
 			DB:       int(redisDB),
 		},
 		MinIO: MinIO{
@@ -76,7 +76,7 @@ func LoadConfig() (*Config, error) {
 			Region:          getEnv("MINIO_REGION", "ru-east-1"),
 		},
 		Server: Server{
-			StreamSeviceAddr: getEnv("STREAM_SERVICE_ADDR", "localhost:50051"),
+			StreamServiceAddr: getEnv("STREAM_SERVICE_ADDR", "localhost:50051"),
 		},
 		Worker: Worker{
 			Concurrency:     int(concurrency),
