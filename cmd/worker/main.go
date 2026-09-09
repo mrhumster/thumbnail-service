@@ -1,18 +1,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/common-nighthawk/go-figure"
 	"github.com/hibiken/asynq"
+	sharedgrpctls "github.com/mrhumster/go-shared/grpctls"
+	sharedworker "github.com/mrhumster/go-shared/worker"
 	"github.com/mrhumster/thumbnail-service/config"
 	pb "github.com/mrhumster/thumbnail-service/gen/go/stream"
-	"github.com/mrhumster/thumbnail-service/internal/grpctls"
 	"github.com/mrhumster/thumbnail-service/internal/processor"
 	"github.com/mrhumster/thumbnail-service/internal/queue"
 	"github.com/mrhumster/thumbnail-service/internal/storage"
-	"github.com/mrhumster/thumbnail-service/internal/worker"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -54,7 +57,7 @@ func main() {
 
 	creds := insecure.NewCredentials()
 	if cfg.Server.GRPCTLSEnabled {
-		creds, err = grpctls.ClientTLSCreds(cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile, "stream-service")
+		creds, err = sharedgrpctls.ClientTLSCreds(cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile, "stream-service")
 		if err != nil {
 			slog.Error("error init gRPC TLS client", "error", err)
 			os.Exit(1)
@@ -74,7 +77,33 @@ func main() {
 
 	streamServiceClient := pb.NewStreamServiceClient(conn)
 
-	srv := worker.NewAsynqWorker(cfg, streamServiceClient)
+	reportThumbnailError := func(ctx context.Context, task *asynq.Task, err error) {
+		var p queue.ThumbsnailProcessorPayload
+		if uerr := json.Unmarshal(task.Payload(), &p); uerr != nil {
+			return
+		}
+		streamServiceClient.UpdateStreamProcessing(ctx, &pb.UpdateStreamProcessingRequest{
+			StreamUuid: p.StreamUUID.String(),
+			Progress:   0,
+			Steps:      []string{"Generating thumbnail"},
+			Error:      fmt.Sprintf("thumbnail worker failed: %v", err),
+		})
+	}
+
+	srv, err := sharedworker.NewAsynqServer(sharedworker.Options{
+		Addr:            cfg.Redis.Addr,
+		Password:        cfg.Redis.Password,
+		DB:              cfg.Redis.DB,
+		Concurrency:     cfg.Worker.Concurrency,
+		ShutdownTimeout: cfg.Worker.ShutdownTimeout,
+		Queues:          map[string]int{"thumbsnails": 6},
+		ErrorReporter:   reportThumbnailError,
+	})
+	if err != nil {
+		slog.Error("error init asynq worker", "error", err)
+		os.Exit(1)
+	}
+
 	handler := queue.NewHandleThumbnail(ffmpeg, minioStorage, streamServiceClient)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(queue.TaskThumbsnailProcessor, handler.HandleThumbsnailTask)

@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/minio/minio-go/v7 v7.0.99
+	github.com/mrhumster/go-shared v0.0.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/mock v0.6.0
 	google.golang.org/grpc v1.79.3
@@ -40,3 +41,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/mrhumster/go-shared => ../shared
