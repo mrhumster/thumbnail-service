@@ -3,11 +3,12 @@ ARG VERSION=0.0.1
 ARG BUILD_DATE=11.03.2026
 
 WORKDIR /app
-COPY go.mod ./
+COPY thumbnail-service/go.mod ./
 
-RUN if [ -f go.sum ]; then cp go.sum .; fi
+RUN if [ -f thumbnail-service/go.sum ]; then cp thumbnail-service/go.sum .; fi
+COPY shared /shared
 RUN go mod download
-COPY . .
+COPY thumbnail-service/. .
 RUN CGO_ENABLED=0 GOOS=linux go build \
   -ldflags="-w -s -X main.version=$VERSION -X main.buildDate=$BUILD_DATE" \
   -o thumbnail-worker ./cmd/worker/main.go
