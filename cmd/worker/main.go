@@ -17,8 +17,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+var (
+	version   = "dev"
+	buildDate = "unknown"
+)
+
 func main() {
-	wellcome := figure.NewFigure("thumbnail v0.1.0", "graffiti", true)
+	wellcome := figure.NewFigure("thumbnail "+version, "graffiti", true)
 	wellcome.Print()
 	opts := &slog.HandlerOptions{
 		Level:     slog.LevelDebug,
