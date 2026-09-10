@@ -12,6 +12,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	pb "github.com/mrhumster/thumbnail-service/gen/go/stream"
+	"github.com/mrhumster/thumbnail-service/internal/metrics"
 	"github.com/mrhumster/thumbnail-service/internal/processor"
 	"github.com/mrhumster/thumbnail-service/internal/storage"
 )
@@ -37,6 +38,21 @@ func (h *HandleThumbnail) HandleThumbsnailTask(ctx context.Context, t *asynq.Tas
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json unmarshal failed: %v", err)
 	}
+
+	start := time.Now()
+	taskErr := h.handleThumbnail(ctx, p)
+	duration := time.Since(start)
+
+	if taskErr != nil {
+		metrics.Errors.Inc()
+	} else {
+		metrics.Generated.Inc()
+		metrics.Duration.Observe(duration.Seconds())
+	}
+	return taskErr
+}
+
+func (h *HandleThumbnail) handleThumbnail(ctx context.Context, p ThumbsnailProcessorPayload) error {
 
 	workDir := fmt.Sprintf("/tmp/%s", p.StreamUUID)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {

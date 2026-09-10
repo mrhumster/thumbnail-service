@@ -11,6 +11,7 @@ import (
 	"github.com/hibiken/asynq"
 	sharedconfig "github.com/mrhumster/go-shared/config"
 	sharedgrpctls "github.com/mrhumster/go-shared/grpctls"
+	sharedmetrics "github.com/mrhumster/go-shared/metrics"
 	sharedworker "github.com/mrhumster/go-shared/worker"
 	pb "github.com/mrhumster/thumbnail-service/gen/go/stream"
 	"github.com/mrhumster/thumbnail-service/internal/processor"
@@ -98,6 +99,7 @@ func main() {
 		ShutdownTimeout: cfg.Worker.ShutdownTimeout,
 		Queues:          map[string]int{"thumbsnails": 6},
 		ErrorReporter:   reportThumbnailError,
+		MetricsAddr:     cfg.Server.MetricsAddr,
 	})
 	if err != nil {
 		slog.Error("error init asynq worker", "error", err)
@@ -106,7 +108,7 @@ func main() {
 
 	handler := queue.NewHandleThumbnail(ffmpeg, minioStorage, streamServiceClient)
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(queue.TaskThumbsnailProcessor, handler.HandleThumbsnailTask)
+	mux.HandleFunc(queue.TaskThumbsnailProcessor, sharedmetrics.Instrument(queue.TaskThumbsnailProcessor, handler.HandleThumbsnailTask))
 
 	slog.Info("Thumbnail Worker started...")
 	if err := srv.Run(mux); err != nil {
