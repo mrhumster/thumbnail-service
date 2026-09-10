@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: thumbnail-service
+  namespace: go-app
+  labels:
+    app: thumbnail-service
+spec:
+  selector:
+    app: thumbnail-service
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
