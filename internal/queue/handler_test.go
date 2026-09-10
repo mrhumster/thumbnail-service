@@ -93,7 +93,7 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 
 	t.Run("missing source skips retry", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		handler, mockProcessor, mockStorage, _ := newHandler(ctrl)
+		handler, mockProcessor, mockStorage, mockService := newHandler(ctrl)
 		ctx := context.Background()
 		task := newTestTask(t, ThumbsnailProcessorPayload{
 			StreamUUID: uuid.New(),
@@ -109,6 +109,9 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		mockProcessor.EXPECT().
 			GenerateThumbnail(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(fmt.Errorf("ffmpeg: 404 Not Found"))
+		mockService.EXPECT().
+			UpdateStreamProcessing(gomock.Any(), gomock.Any()).
+			Return(&stream.UpdateStreamProcessingResponse{Updated: true}, nil)
 
 		err := handler.HandleThumbsnailTask(ctx, task)
 		require.Error(t, err)
@@ -117,7 +120,7 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 
 	t.Run("generate error propagated", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		handler, mockProcessor, mockStorage, _ := newHandler(ctrl)
+		handler, mockProcessor, mockStorage, mockService := newHandler(ctrl)
 		ctx := context.Background()
 		task := newTestTask(t, ThumbsnailProcessorPayload{
 			StreamUUID: uuid.New(),
@@ -133,6 +136,9 @@ func TestHandleThumbnail_HandleThumbsnailTask(t *testing.T) {
 		mockProcessor.EXPECT().
 			GenerateThumbnail(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(fmt.Errorf("generate error"))
+		mockService.EXPECT().
+			UpdateStreamProcessing(gomock.Any(), gomock.Any()).
+			Return(&stream.UpdateStreamProcessingResponse{Updated: true}, nil)
 
 		err := handler.HandleThumbsnailTask(ctx, task)
 		require.Error(t, err)

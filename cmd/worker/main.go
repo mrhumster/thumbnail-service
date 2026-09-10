@@ -88,6 +88,7 @@ func main() {
 			Progress:   0,
 			Steps:      []string{"Generating thumbnail"},
 			Error:      fmt.Sprintf("thumbnail worker failed: %v", err),
+			Task:       "thumbnail",
 		})
 	}
 

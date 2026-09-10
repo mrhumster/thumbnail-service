@@ -80,8 +80,10 @@ func (h *HandleThumbnail) handleThumbnail(ctx context.Context, p ThumbsnailProce
 	if err := h.processor.GenerateThumbnail(ctx, inputURL, thumbLocal, seek); err != nil {
 		slog.Error("thumbnail generation failed", "uuid", p.StreamUUID, "error", err)
 		if isMissingSource(err) {
+			h.reportError(ctx, p, "source missing: "+err.Error())
 			return fmt.Errorf("source missing: %w", asynq.SkipRetry)
 		}
+		h.reportError(ctx, p, err.Error())
 		return err
 	}
 
@@ -96,6 +98,7 @@ func (h *HandleThumbnail) handleThumbnail(ctx context.Context, p ThumbsnailProce
 		StreamUuid: p.StreamUUID.String(),
 		Progress:   100,
 		Steps:      []string{"Generating thumbnail"},
+		Task:       "thumbnail",
 	}); err != nil {
 		slog.Error("grpc update processing failed", "uuid", p.StreamUUID, "error", err)
 		return err
@@ -103,6 +106,18 @@ func (h *HandleThumbnail) handleThumbnail(ctx context.Context, p ThumbsnailProce
 
 	slog.Info("thumbnail generated", "uuid", p.StreamUUID, "key", remoteKey)
 	return nil
+}
+
+func (h *HandleThumbnail) reportError(ctx context.Context, p ThumbsnailProcessorPayload, msg string) {
+	if _, err := h.streamService.UpdateStreamProcessing(ctx, &pb.UpdateStreamProcessingRequest{
+		StreamUuid: p.StreamUUID.String(),
+		Progress:   0,
+		Steps:      []string{"Generating thumbnail"},
+		Error:      msg,
+		Task:       "thumbnail",
+	}); err != nil {
+		slog.Error("grpc update processing error failed", "uuid", p.StreamUUID, "error", err)
+	}
 }
 
 func isMissingSource(err error) bool {
