@@ -1,60 +1,164 @@
 # thumbnail-service
 
-Generates video preview thumbnails for GoCast streams. An **asynq** worker scaled by
-**KEDA** — it sleeps at 0 replicas and wakes up when a `thumbsnails` task lands in the queue.
+Generates a single preview frame (poster) per GoCast stream. An **asynq** worker scaled by
+**KEDA** — it idles at 0 replicas and wakes up when a thumbnail task lands in the queue.
+
+Only the poster frame is produced here. The HLS renditions and audio are the transcoder's job
+(`services/transcoder-service`); both workers are enqueued together when an upload completes.
 
 ## How it works
 
-- Stream-service enqueues a `thumbsnails` task (Redis asynq queue, DB 2);
-- KEDA `ScaledObject` watches the queue length and scales the deployment from 0;
-- The worker reads the source video from MinIO, extracts a frame with ffmpeg, writes the
-  thumbnail, and reports progress/state via gRPC `UpdateStreamProcessing` back to stream-service;
-- KEDA scales back to 0 when the queue drains (normal).
+1. `stream-service` enqueues a task into the asynq `thumbsnails` queue (Redis DB 2).
+2. KEDA's `ScaledObject` watches the queue length and scales the Deployment from 0 replicas.
+3. The worker:
+   - creates a per-task work dir `/tmp/<stream-uuid>` and removes it on return (`defer`);
+   - asks MinIO for a **presigned GET URL** (TTL 15 min) for the source object;
+   - probes the duration with `ffprobe` (a failure is non-fatal — it falls back to `0`);
+   - extracts a frame at **10% of the duration** with `ffmpeg` into `/tmp/<uuid>/thumbnail.jpg`;
+   - uploads it to `thumbnails/<uuid>.jpg` with content type `image/jpeg`;
+   - reports the result over gRPC `UpdateStreamProcessing` with `Task: "thumbnail"`.
+4. KEDA scales back to 0 when the queue drains (normal, not a fault).
+
+Frame choice: `ffmpeg -ss <10%> -i <url> -frames:v 1 -vf scale=1280:-2 -q:v 3`. Seeking to 10%
+avoids the black opening frame most encodes start with.
+
+**Missing source is terminal, not retryable.** If MinIO reports `404` / `NoSuchKey` / `not found`
+(e.g. the original file was already removed after transcode), the task reports the error over
+gRPC and returns `asynq.SkipRetry` — retrying cannot fix a deleted object.
 
 ## Spec
 
 | Layer | Tech |
 |---|---|
-| Task queue | Asynq (Redis), queue `thumbsnails` |
-| Processing | ffmpeg (`internal/processor`) |
+| Task queue | asynq (Redis), queue `thumbsnails`, priority `6` |
+| Processing | `ffmpeg` / `ffprobe` (`internal/processor`) |
 | Storage | MinIO (`internal/storage`) |
-| gRPC | Client to stream-service (**mTLS**, serverName `stream-service`) |
-| Metrics | Prometheus `/metrics` on `METRICS_ADDR` (default `:9090` in K8s) |
-| Config | `sharedconfig` from `go-shared` (env-driven) |
+| gRPC | client to stream-service — **mTLS**, serverName `stream-service` |
+| Metrics | Prometheus `/metrics` on `METRICS_ADDR` (`:9090` in K8s) |
+| Config | `sharedconfig.LoadConfig()` from `go-shared` (env-driven) |
+| Task type | `video:thumbsnail` (sic) — the queue type string is misspelled in the producer and must match |
+
+Payload (`ThumbsnailProcessorPayload`): `{ "stream_uuid": "<uuid>", "input_path": "<minio key>" }`.
 
 ## Metrics
 
-Exposed via `METRICS_ADDR` (empty = off) with `promhttp`:
+Exposed via `METRICS_ADDR` (empty = off) through `promhttp`:
 
-- `thumbnail_generated_total`, `thumbnail_generation_duration_seconds`,
-  `thumbnail_generation_errors_total`
+- `thumbnail_generated_total` — counter, successful poster generations
+- `thumbnail_errors_total` — counter, failed attempts
+- `thumbnail_duration_seconds` — histogram, end-to-end task duration (observed on success only)
 
-Plus shared asynq-task metrics from `go-shared/metrics` (`asynq_task_processed_total`,
-`asynq_task_duration_seconds`, `asynq_task_inflight`). Kubernetes liveness probes hit
-`/metrics` (HTTP GET) instead of `ps`, and the Deployment carries `prometheus.io/*` annotations.
+Plus the shared asynq metrics from `go-shared/metrics`: `asynq_task_processed_total`,
+`asynq_task_duration_seconds`, `asynq_task_inflight`.
+
+The liveness probe is an HTTP GET on `/metrics` (not the old `ps aux` exec), and the Deployment
+carries `prometheus.io/{scrape,port,path}` annotations. Because KEDA holds the pod at 0 replicas
+when idle, the asynq and business series disappear from Prometheus in between bursts — empty
+panels are expected, not a broken pipeline.
 
 ## Configuration
 
-Loaded from env by `sharedconfig.LoadConfig()` (root `.env` → `thumbnail-service-config`
-ConfigMap). See `services/shared/README.md` for the full variable list; the relevant ones:
-`REDIS_ADDR`, `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`/`MINIO_BUCKET_NAME`,
-`STREAM_SERVICE_ADDRESS`, `GRPC_TLS_*`, `METRICS_ADDR`.
+All variables are read by `sharedconfig.LoadConfig()`; the full list lives in
+`services/shared/README.md`. In Kubernetes they arrive through four sources
+(`deploy/k8s/thumbnail/deployment.yaml`):
+
+| Source | Variables |
+|---|---|
+| ConfigMap `thumbnail-service-config` (rendered by `scripts/render-env.sh`) | `WORKER_CONCURRENCY`, `WORKER_SHUTDOWN_TIMEOUT`, `METRICS_ADDR` |
+| ConfigMap `go-app-config` | `MINIO_ENDPOINT`, `MINIO_BUCKET_NAME`, `MINIO_REGION`, `MINIO_USE_SSL`, `REDIS_ADDR`, `STREAM_SERVICE_ADDR` |
+| Secret `casbin-redis` | Redis password (lowercase key `redis-password`) |
+| Secret `minio-credentials` | `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` |
+| Inline `env` | `GRPC_TLS_ENABLED=true`, `GRPC_TLS_CERT`, `GRPC_TLS_KEY`, `GRPC_TLS_CA` |
+
+Note the variable is **`STREAM_SERVICE_ADDR`** (not `..._ADDRESS`). The full MinIO path is
+`<MINIO_ENDPOINT>/<MINIO_BUCKET_NAME>/<input_path>`; the worker never touches the original
+bucket layout itself.
+
+## gRPC / mTLS
+
+`grpctls.ClientTLSCreds(cert, key, ca, "stream-service")` when `GRPC_TLS_ENABLED=true`
+(insecure otherwise). Certificates come from the `grpc-thumbnail-tls` secret mounted at
+`/tls/grpc`, issued by cert-manager `local-ca` with OU = `thumbnail-service`; stream-service's
+`AllowOUsInterceptor` accepts the thumbnail and transcoder OUs for the read path. The certs are
+generated by `deploy/k8s/grpc-mtls/grpc-certificates.yaml` in the `gocast-infra` root repo.
+
+## Project layout
+
+```
+thumbnail-service/
+├── cmd/worker/main.go           # asynq server wiring, TLS, handler registration
+├── internal/
+│   ├── metrics/metrics.go       # business counters + histogram
+│   ├── processor/ffmpeg.go      # GetDuration, GenerateThumbnail
+│   ├── processor/mock/          # gomock ThumbnailProcessor
+│   ├── queue/                   # payload + asynq handler
+│   ├── service/mock/            # gomock StreamServiceClient
+│   ├── storage/                 # MinIO FileStorage
+│   └── storage/mock/            # gomock FileStorage, MinioClient
+├── gen/go/stream/               # generated gRPC code (from ../proto)
+├── proto/                       # symlink/copy of the shared stream_service.proto
+├── deploy/k8s/
+│   ├── keda/{auth,scaledobject}.yaml
+│   └── thumbnail/{deployment,service}.yaml
+└── Dockerfile                   # alpine:3.18 + ffmpeg, non-root appuser (uid 1000)
+```
+
+Module: `github.com/mrhumster/thumbnail-service`, with
+`replace github.com/mrhumster/go-shared => ../shared`.
+
+## Commands
+
+```bash
+make build           # go build ./...
+make test            # go test ./...
+make vet             # go vet ./...
+make proto           # regenerate gen/go from proto/stream_service.proto (needs protoc)
+make docker-build    # docker build with VERSION/BUILD_DATE from git describe
+make docker-push
+make docker-deploy   # kubectl set image + rollout status
+make keda-deploy     # apply KEDA auth + ScaledObject
+make logs            # tail worker logs
+```
+
+`make build push deploy` does not work — the targets are `docker-*`-prefixed. Because
+`docker-deploy` pins the image to `git describe --tags --always`, rebuilding an unchanged
+working tree reuses the same tag and `set image` becomes a no-op; use
+`kubectl rollout restart deployment/thumbnail-service -n go-app` in that case.
 
 ## Deployment
-
-K8s manifests under `deploy/k8s/`:
 
 ```
 deploy/k8s/
 ├── keda/
-│   ├── auth.yaml           # Redis trigger auth
-│   └── scaledobject.yaml   # scale from/to 0 based on queue length
+│   ├── auth.yaml           # Redis trigger auth (uses casbin-redis secret)
+│   └── scaledobject.yaml   # scale 0..3 on queue length
 └── thumbnail/
-    ├── deployment.yaml     # image xomrkob/thumbnail-service:<git-tag>, metrics containerPort
-    └── service.yaml        # ClusterIP for :9090 metrics scraping
+    ├── deployment.yaml     # image xomrkob/thumbnail-service:<tag>, metrics :9090
+    └── service.yaml        # ClusterIP service for metrics scraping
 ```
 
-Build/push/deploy: `make build push deploy` (image `xomrkob/thumbnail-service:<git-tag>`).
+KEDA polls Redis DB 2 lists `asynq:{thumbsnails}:pending` and `asynq:{thumbsnails}:active`,
+scaling when either exceeds `listLength: 2`, with a 120s cooldown. Resources are deliberately
+small (requests 200m CPU / 256Mi) so several workers fit on a 4-core homelab node; the 10Gi
+`emptyDir` at `/tmp` is the scratch space for the source frame.
 
-The asynq worker scaffolding (`worker.NewAsynqServer`, ErrorHandler wiring) is shared with
+The asynq scaffolding (`worker.NewAsynqServer`, error-reporter wiring) is shared with
 transcoder — see `services/shared/worker`.
+
+## Known issues
+
+- **Duplicate `volumeMounts` in `deploy/k8s/thumbnail/deployment.yaml`.** The container declares
+  the key twice (the `/tmp` `tmp-disk` mount first, the `/tls/grpc` mount second). YAML parsers
+  keep the last occurrence, so **`/tmp` is not actually mounted** and the `tmp-disk` volume is
+  declared but unused — ffmpeg writes to the container's writable layer instead. Move the `/tmp`
+  entry into the second list.
+- **`terminationGracePeriodSeconds: 3600`** (1 hour) combined with `preStop: sleep 5`. KEDA
+  scale-down can therefore hang for up to an hour after the queue drains. Transcoder uses 300s.
+- **Task-type typo `video:thumbsnail`.** The queue type string is misspelled in both the producer
+  and this worker; renaming it requires changing both sides at once.
+- **Deleted sources are unrecoverable.** Originals are purged after transcode
+  (`KEEP_ORIGINAL_FILE=false` in `render-env.sh`), so re-running thumbnail generation for an
+  already-`ready` stream fails with "source missing" and is intentionally not retried. The HLS
+  fallback that the faces worker uses for this case does not exist here.
+- **Dockerfile `EXPOSE 8080` is stale.** The worker serves no application port; metrics are on
+  9090 in Kubernetes. `EXPOSE` is documentation-only and has no effect.
